@@ -19,6 +19,7 @@ import (
 	"errors"
 
 	"github.com/nerdynz/datastore"
+	"github.com/nerdynz/flow"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -67,6 +68,13 @@ type UserSessionToken struct {
 }
 
 type UserSessionTokens []*UserSessionToken
+
+func NewWithContext(ctx *context.Context) *Padlock {
+	padlock := &Padlock{}
+	padlock.Req = ctx.Req
+	padlock.Store = ctx.Store
+	return padlock
+}
 
 func New(req *http.Request, store *datastore.Datastore) *Padlock {
 	padlock := &Padlock{}
@@ -214,6 +222,10 @@ func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
 	// log.Info("user is good?", user)
 	if err != nil {
 		return nil, err
+	}
+
+	if user.ID == 0 {
+		return nil, errors.New("user doesn't exist")
 	}
 
 	if user.CacheToken == "" {
