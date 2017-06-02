@@ -69,7 +69,7 @@ type UserSessionToken struct {
 
 type UserSessionTokens []*UserSessionToken
 
-func NewWithContext(ctx *context.Context) *Padlock {
+func NewWithContext(ctx *flow.Context) *Padlock {
 	padlock := &Padlock{}
 	padlock.Req = ctx.Req
 	padlock.Store = ctx.Store
