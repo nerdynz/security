@@ -69,6 +69,7 @@ type UserSessionToken struct {
 
 type UserSessionTokens []*UserSessionToken
 
+// TODO REFACTOR... Bad naming
 func NewWithContext(ctx *flow.Context) *Padlock {
 	padlock := &Padlock{}
 	padlock.Req = ctx.Req
