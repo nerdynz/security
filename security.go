@@ -19,7 +19,6 @@ import (
 	"errors"
 
 	"github.com/nerdynz/datastore"
-	"github.com/nerdynz/flow"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -54,8 +53,9 @@ type SessionUser struct {
 }
 
 type Padlock struct {
-	Req   *http.Request
-	Store *datastore.Datastore
+	Req          *http.Request
+	Store        *datastore.Datastore
+	loggedInUser *SessionUser
 }
 
 type UserSessionToken struct {
@@ -70,12 +70,12 @@ type UserSessionToken struct {
 type UserSessionTokens []*UserSessionToken
 
 // TODO REFACTOR... Bad naming
-func NewWithContext(ctx *flow.Context) *Padlock {
-	padlock := &Padlock{}
-	padlock.Req = ctx.Req
-	padlock.Store = ctx.Store
-	return padlock
-}
+// func NewWithContext(ctx *flow.Context) *Padlock {
+// 	padlock := &Padlock{}
+// 	padlock.Req = ctx.Req
+// 	padlock.Store = ctx.Store
+// 	return padlock
+// }
 
 func New(req *http.Request, store *datastore.Datastore) *Padlock {
 	padlock := &Padlock{}
@@ -85,6 +85,35 @@ func New(req *http.Request, store *datastore.Datastore) *Padlock {
 }
 
 func (padlock *Padlock) LoginReturningInfo(email string, password string, tableName string) (*SessionInfo, error) {
+	return padlock.LoginReturningInfoEx(-1, email, password, tableName)
+}
+
+// BypassLoginReturningCookie gets a login cookie without needing user name and password,
+// for example user has just signed up, meaning we of course know they are valid
+// or we have logged in via facebook oauth
+// THIS SHOULD NOT BE USED FROM A REQUEST VARIABLE i.e. pass ID and login, we NEED TO CHECK THERE PASSWORD or FACEBOOK AUTH ETC
+func (padlock *Padlock) BypassLoginReturningCookie(id int, tableName string) (*http.Cookie, error) {
+	tokenName := getSessionUserCookieName()
+	sessionInfo, err := padlock.LoginReturningInfoEx(id, "", "", tableName) // same process / different format
+	if err != nil {
+		return nil, err
+	}
+	cookie := &http.Cookie{Name: tokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.Req.Host}
+	return cookie, nil
+}
+
+func (padlock *Padlock) LoginReturningCookie(email string, password string, tableName string) (*http.Cookie, error) {
+	tokenName := getSessionUserCookieName()
+
+	sessionInfo, err := padlock.LoginReturningInfo(email, password, tableName) // same process / different format
+	if err != nil {
+		return nil, err
+	}
+	cookie := &http.Cookie{Name: tokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.Req.Host}
+	return cookie, nil
+}
+
+func (padlock *Padlock) LoginReturningInfoEx(id int, email string, password string, tableName string) (*SessionInfo, error) {
 	info := &SessionInfo{}
 	user := &SessionUser{}
 
@@ -96,18 +125,24 @@ func (padlock *Padlock) LoginReturningInfo(email string, password string, tableN
 		tableIDName = "administrator_id"
 	} else if tableName == "user" {
 		tableIDName = "user_id"
+	} else if tableName == "member" {
+		tableIDName = "member_id"
 	} else if tableName == "person" {
 		tableIDName = "person_id"
 	} else {
 		return nil, errors.New("Invalid table name for security SessionUser table")
 	}
 
-	err := padlock.Store.DB.
-		Select(tableIDName+" as id, name, email, password, role").
-		From(tableName).
-		Where("LOWER(email) = LOWER($1) and password = $2", email, password).
-		Limit(1).
-		QueryStruct(user)
+	sql := padlock.Store.DB.
+		Select(tableIDName + " as id, name, email, password, role").
+		From(tableName)
+	if id > 0 {
+		sql.Where(tableIDName+" = $1", id) // id doesn't need a password as we already know who they are
+	} else {
+		sql.Where("LOWER(email) = LOWER($1) and password = $2", email, password)
+	}
+	sql.Limit(1)
+	err := sql.QueryStruct(user)
 
 	if err != nil {
 		return nil, errors.New("Login Failed")
@@ -167,18 +202,21 @@ func (padlock *Padlock) LoginReturningInfo(email string, password string, tableN
 	return info, nil
 }
 
-func (padlock *Padlock) LoginReturningCookie(email string, password string, tableName string) (*http.Cookie, error) {
-	tokenName := getSessionUserCookieName()
-
-	sessionInfo, err := padlock.LoginReturningInfo(email, password, tableName) // same process / different format
-	if err != nil {
-		return nil, err
-	}
-	cookie := &http.Cookie{Name: tokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.Req.Host}
-	return cookie, nil
+func (padlock *Padlock) IsLoggedIn() bool {
+	user, _ := padlock.LoggedInUser()
+	return user != nil
 }
 
+func (padlock *Padlock) Logout() {
+	user, _ := padlock.LoggedInUser()
+	padlock.Store.Cache.Set(user.CacheToken, "", 1*time.Second)
+
+}
 func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
+	// optimise
+	if padlock.loggedInUser != nil {
+		return padlock.loggedInUser, nil
+	}
 	// check for basic authentication header
 	authToken := ""
 
@@ -241,7 +279,6 @@ func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
 	}
 
 	err = json.Unmarshal([]byte(serializedUser), cachedUser)
-	//log.Info("xx is good?", cachedUser)
 
 	if err != nil {
 		return nil, err
@@ -249,6 +286,7 @@ func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
 
 	// awesome - you are logged in
 	if cachedUser.Email == user.Email && cachedUser.Password == user.Password && cachedUser.ID == user.ID {
+		padlock.loggedInUser = cachedUser
 		return cachedUser, nil
 	}
 	return nil, errors.New("user didnt match cache... something funky here.")
