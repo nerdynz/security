@@ -212,11 +212,8 @@ func (padlock *Padlock) Logout() {
 	padlock.Store.Cache.Set(user.CacheToken, "", 1*time.Second)
 
 }
-func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
-	// optimise
-	if padlock.loggedInUser != nil {
-		return padlock.loggedInUser, nil
-	}
+
+func (padlock *Padlock) GetAuthToken() (string, error) {
 	// check for basic authentication header
 	authToken := ""
 
@@ -226,7 +223,7 @@ func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
 		// potentially found a token in the Authorization header
 		authTokenBits := strings.Split(authHeader, "Basic ")
 		if len(authTokenBits) == 1 {
-			return nil, errors.New("invalid auth token")
+			return "", errors.New("invalid auth token")
 		}
 		authToken = authTokenBits[1]
 	}
@@ -242,12 +239,23 @@ func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
 		cookie, err := padlock.Req.Cookie(tokenName)
 		if err != nil {
 			if err.Error() == "http: named cookie not present" {
-				return nil, errors.New("no auth details found in the request")
+				return "", errors.New("no auth details found in the request")
 			}
-			panic(err)
+			return "", err
 		}
 		authToken = cookie.Value
 	}
+	return authToken, nil
+}
+
+func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
+	// optimise
+	if padlock.loggedInUser != nil {
+		return padlock.loggedInUser, nil
+	}
+
+	authToken, err := padlock.GetAuthToken()
+
 	user := &SessionUser{}
 
 	//Decrypt the authToken
