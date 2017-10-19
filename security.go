@@ -50,6 +50,7 @@ type SessionUser struct {
 	Password   string `db:"password" json:"-"`
 	Role       string `db:"role" json:"Role"`
 	CacheToken string `json:"CacheToken"`
+	TableName  string `json:"TableName"`
 }
 
 type Padlock struct {
@@ -150,6 +151,7 @@ func (padlock *Padlock) LoginReturningInfoEx(id int, email string, password stri
 
 	uuid := uuid.NewV4().String() //key for redis or something needs to be part of the json package
 	user.CacheToken = uuid
+	user.TableName = tableName
 	// save the new sessionToken into the database so it can be cleared from the cache later if the user gets deleted
 
 	jsonUser, err := json.Marshal(user)
@@ -205,6 +207,14 @@ func (padlock *Padlock) LoginReturningInfoEx(id int, email string, password stri
 func (padlock *Padlock) IsLoggedIn() bool {
 	user, _ := padlock.LoggedInUser()
 	return user != nil
+}
+
+func (padlock *Padlock) IsLoggedInAs(tableName string) bool {
+	user, _ := padlock.LoggedInUser()
+	if user == nil {
+		return false
+	}
+	return user.TableName == tableName
 }
 
 func (padlock *Padlock) Logout() {
