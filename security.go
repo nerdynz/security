@@ -49,6 +49,7 @@ type SessionUser struct {
 	Email      string `db:"email" json:"Email"`
 	Password   string `db:"password" json:"-"`
 	Role       string `db:"role" json:"Role"`
+	SiteID     int    `db:"site_id" json:"SiteID"`
 	CacheToken string `json:"CacheToken"`
 	TableName  string `json:"TableName"`
 }
@@ -57,6 +58,7 @@ type Padlock struct {
 	Req          *http.Request
 	Store        *datastore.Datastore
 	loggedInUser *SessionUser
+	siteID       int
 }
 
 type UserSessionToken struct {
@@ -134,9 +136,14 @@ func (padlock *Padlock) LoginReturningInfoEx(id int, email string, password stri
 		return nil, errors.New("Invalid table name for security SessionUser table")
 	}
 
+	ex := ""
+	if padlock.Store.Settings.IsSiteBound {
+		ex += ",site_id"
+	}
 	sql := padlock.Store.DB.
-		Select(tableIDName + " as id, name, email, password, role").
+		Select(tableIDName + " as id, name, email, password, role" + ex).
 		From(tableName)
+
 	if id > 0 {
 		sql.Where(tableIDName+" = $1", id) // id doesn't need a password as we already know who they are
 	} else {
@@ -202,6 +209,25 @@ func (padlock *Padlock) LoginReturningInfoEx(id int, email string, password stri
 
 	info.User = user
 	return info, nil
+}
+
+func (padlock *Padlock) SiteID() int {
+	// optimise
+	if padlock.siteID > 0 {
+		return padlock.siteID
+	}
+	if padlock.Store.Settings.IsSiteBound {
+		if padlock.IsLoggedIn() {
+			user, _ := padlock.LoggedInUser()
+			if user.SiteID < 1 {
+				panic("Invalid siteID")
+			}
+			padlock.siteID = user.SiteID
+			return user.SiteID
+		}
+		panic("SiteID accessed without being logged in")
+	}
+	panic("IS_SITE_BOUND not set")
 }
 
 func (padlock *Padlock) IsLoggedIn() bool {
