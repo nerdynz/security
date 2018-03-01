@@ -18,6 +18,7 @@ import (
 
 	"errors"
 
+	"github.com/go-zoo/bone"
 	"github.com/nerdynz/datastore"
 	uuid "github.com/satori/go.uuid"
 )
@@ -267,6 +268,10 @@ func (padlock *Padlock) GetAuthToken() (string, error) {
 	// we still haven't found the authtoken so try checking a cookie
 	if authToken == "" {
 		authToken = padlock.Req.URL.Query().Get("authtoken")
+	}
+	// we still haven't got it so check router
+	if authToken == "" {
+		authToken = bone.GetValue(padlock.Req, "authtoken")
 	}
 
 	// we still haven't found the authtoken so try checking a cookie
