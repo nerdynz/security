@@ -273,7 +273,6 @@ func (padlock *Padlock) GetAuthToken() (string, error) {
 	if authToken == "" {
 		authToken = bone.GetValue(padlock.Req, "authtoken")
 	}
-
 	// we still haven't found the authtoken so try checking a cookie
 	if authToken == "" {
 		tokenName := getSessionUserCookieName()
