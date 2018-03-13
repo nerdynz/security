@@ -59,6 +59,7 @@ type Padlock struct {
 	Req          *http.Request
 	Store        *datastore.Datastore
 	loggedInUser *SessionUser
+	token        string
 	siteID       int
 }
 
@@ -84,6 +85,14 @@ type UserSessionTokens []*UserSessionToken
 func New(req *http.Request, store *datastore.Datastore) *Padlock {
 	padlock := &Padlock{}
 	padlock.Req = req
+	padlock.Store = store
+	return padlock
+}
+
+// NewWithToken - doesnt rely on request, current usecase is websockets... im sure there are more
+func NewWithToken(token string, store *datastore.Datastore) *Padlock {
+	padlock := &Padlock{}
+	padlock.token = token
 	padlock.Store = store
 	return padlock
 }
@@ -252,17 +261,19 @@ func (padlock *Padlock) Logout() {
 
 func (padlock *Padlock) GetAuthToken() (string, error) {
 	// check for basic authentication header
-	authToken := ""
+	authToken := padlock.token // we already have it
 
 	// check the request header
-	authHeader := padlock.Req.Header.Get("Authorization")
-	if authHeader != "" {
-		// potentially found a token in the Authorization header
-		authTokenBits := strings.Split(authHeader, "Basic ")
-		if len(authTokenBits) == 1 {
-			return "", errors.New("invalid auth token")
+	if authToken == "" {
+		authHeader := padlock.Req.Header.Get("Authorization")
+		if authHeader != "" {
+			// potentially found a token in the Authorization header
+			authTokenBits := strings.Split(authHeader, "Basic ")
+			if len(authTokenBits) == 1 {
+				return "", errors.New("invalid auth token")
+			}
+			authToken = authTokenBits[1]
 		}
-		authToken = authTokenBits[1]
 	}
 
 	// we still haven't found the authtoken so try checking a cookie
@@ -289,7 +300,7 @@ func (padlock *Padlock) GetAuthToken() (string, error) {
 }
 
 func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
-	// optimise
+	// optimisation
 	if padlock.loggedInUser != nil {
 		return padlock.loggedInUser, nil
 	}
@@ -335,6 +346,7 @@ func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
 	// awesome - you are logged in
 	if cachedUser.Email == user.Email && cachedUser.Password == user.Password && cachedUser.ID == user.ID {
 		padlock.loggedInUser = cachedUser
+		padlock.siteID = cachedUser.SiteID
 		return cachedUser, nil
 	}
 	return nil, errors.New("user didnt match cache... something funky here.")
