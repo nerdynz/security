@@ -259,6 +259,10 @@ func (padlock *Padlock) Logout() {
 
 }
 
+func (padlock *Padlock) UpdateAuthToken(tok string) {
+	padlock.token = tok
+}
+
 func (padlock *Padlock) GetAuthToken() (string, error) {
 	// check for basic authentication header
 	authToken := padlock.token // we already have it
