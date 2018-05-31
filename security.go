@@ -303,6 +303,14 @@ func (padlock *Padlock) GetAuthToken() (string, error) {
 	return authToken, nil
 }
 
+func (padlock *Padlock) LoggedInUserID() int {
+	user, err := padlock.LoggedInUser()
+	if err != nil {
+		return -1
+	}
+	return user.ID
+}
+
 func (padlock *Padlock) LoggedInUser() (*SessionUser, error) {
 	// optimisation
 	if padlock.loggedInUser != nil {
