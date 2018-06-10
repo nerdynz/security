@@ -166,7 +166,7 @@ func (padlock *Padlock) LoginReturningInfoEx(id int, email string, password stri
 		return nil, errors.New("Login Failed")
 	}
 
-	uuid := uuid.NewV4().String() //key for redis or something needs to be part of the json package
+	uuid := uuid.Must(uuid.NewV4()).String() //key for redis or something needs to be part of the json package
 	user.CacheToken = uuid
 	user.TableName = tableName
 	// save the new sessionToken into the database so it can be cleared from the cache later if the user gets deleted
