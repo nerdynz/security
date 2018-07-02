@@ -407,7 +407,7 @@ func Encrypt(text string) string {
 func Decrypt(cryptoText string) (string, error) {
 	key := os.Getenv("SECURITY_ENCRYPTION_KEY")
 	cypherKey := []byte(key)
-	ciphertext, _ := base64.URLEncoding.DecodeString(cryptoText)
+	ciphertext, _ := Base64Decrypt(cryptoText)
 	block, err := aes.NewCipher(cypherKey)
 	if err != nil {
 		return "", err
@@ -427,6 +427,10 @@ func Decrypt(cryptoText string) (string, error) {
 	stream.XORKeyStream(ciphertext, ciphertext)
 
 	return fmt.Sprintf("%s", ciphertext), nil
+}
+
+func Base64Decrypt(b64 string) ([]byte, error) {
+	return base64.URLEncoding.DecodeString(b64)
 }
 
 func GenerateRandomKey(length int) []byte {
