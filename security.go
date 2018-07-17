@@ -8,8 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	mathRand "math/rand"
 	"net/http"
 	"time"
+
+	"github.com/oklog/ulid"
 
 	"os"
 	"strconv"
@@ -20,7 +23,6 @@ import (
 
 	"github.com/go-zoo/bone"
 	"github.com/nerdynz/datastore"
-	uuid "github.com/satori/go.uuid"
 )
 
 const (
@@ -166,8 +168,7 @@ func (padlock *Padlock) LoginReturningInfoEx(id int, email string, password stri
 		return nil, errors.New("Login Failed")
 	}
 
-	uuid := uuid.Must(uuid.NewV4()).String() //key for redis or something needs to be part of the json package
-	user.CacheToken = uuid
+	user.CacheToken = ULID()
 	user.TableName = tableName
 	// save the new sessionToken into the database so it can be cleared from the cache later if the user gets deleted
 
@@ -439,6 +440,14 @@ func GenerateRandomKey(length int) []byte {
 		return nil
 	}
 	return k
+}
+
+// ULID - not concurrent
+func ULID() string {
+	t := time.Now()
+	entropy := mathRand.New(mathRand.NewSource(t.UnixNano()))
+	u := ulid.MustNew(ulid.Timestamp(t), entropy)
+	return u.String()
 }
 
 func getSessionUserCookieName() string {
