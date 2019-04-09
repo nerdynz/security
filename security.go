@@ -408,7 +408,7 @@ func Encrypt(text string) string {
 func Decrypt(cryptoText string) (string, error) {
 	key := os.Getenv("SECURITY_ENCRYPTION_KEY")
 	cypherKey := []byte(key)
-	ciphertext, _ := Base64Decrypt(cryptoText)
+	ciphertext, _ := base64Decrypt(cryptoText)
 	block, err := aes.NewCipher(cypherKey)
 	if err != nil {
 		return "", err
@@ -430,8 +430,12 @@ func Decrypt(cryptoText string) (string, error) {
 	return fmt.Sprintf("%s", ciphertext), nil
 }
 
-func Base64Decrypt(b64 string) ([]byte, error) {
+func base64Decrypt(b64 string) ([]byte, error) {
 	return base64.URLEncoding.DecodeString(b64)
+}
+
+func Base64Encode(b64 []byte) string {
+	return base64.URLEncoding.EncodeToString(b64)
 }
 
 func GenerateRandomKey(length int) []byte {
