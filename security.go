@@ -22,7 +22,7 @@ import (
 	"errors"
 
 	"github.com/go-zoo/bone"
-	"github.com/nerdynz/datastore"
+	"github.com/bkono/datastore"
 )
 
 const (
