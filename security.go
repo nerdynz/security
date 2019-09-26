@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/oklog/ulid"
+	"golang.org/x/oauth2"
 
 	"os"
 	"strconv"
@@ -55,6 +56,7 @@ type SessionUser struct {
 	SiteID     int    `db:"site_id" json:"SiteID"`
 	CacheToken string `json:"CacheToken"`
 	TableName  string `json:"TableName"`
+	Token      *oauth2.Token
 }
 
 type Padlock struct {
@@ -100,7 +102,7 @@ func NewWithToken(token string, store *datastore.Datastore) *Padlock {
 }
 
 func (padlock *Padlock) LoginReturningInfo(email string, password string, tableName string) (*SessionInfo, error) {
-	return padlock.login(-1, email, password, tableName, "", 0)
+	return padlock.login(-1, email, password, tableName, nil)
 }
 
 // BypassLoginReturningCookie gets a login cookie without needing user name and password,
@@ -109,7 +111,7 @@ func (padlock *Padlock) LoginReturningInfo(email string, password string, tableN
 // THIS SHOULD NOT BE USED FROM A REQUEST VARIABLE i.e. pass ID and login, we NEED TO CHECK THERE PASSWORD or FACEBOOK AUTH ETC
 func (padlock *Padlock) BypassLoginReturningCookie(id int, tableName string) (*http.Cookie, error) {
 	tokenName := getSessionUserCookieName()
-	sessionInfo, err := padlock.login(id, "", "", tableName, "", 0) // same process / different format
+	sessionInfo, err := padlock.login(id, "", "", tableName, nil) // same process / different format
 	if err != nil {
 		return nil, err
 	}
@@ -128,11 +130,11 @@ func (padlock *Padlock) LoginReturningCookie(email string, password string, tabl
 	return cookie, nil
 }
 
-func (padlock *Padlock) LoginWithToken(id int, tableName string, token string, expiresIn int) (*SessionInfo, error) {
-	return padlock.login(id, "", "", tableName, token, expiresIn)
+func (padlock *Padlock) LoginWithToken(id int, tableName string, token *oauth2.Token) (*SessionInfo, error) {
+	return padlock.login(id, "", "", tableName, token)
 }
 
-func (padlock *Padlock) login(id int, email string, password string, tableName string, token string, expiresIn int) (*SessionInfo, error) {
+func (padlock *Padlock) login(id int, email string, password string, tableName string, token *oauth2.Token) (*SessionInfo, error) {
 	info := &SessionInfo{}
 	user := &SessionUser{}
 
@@ -172,11 +174,9 @@ func (padlock *Padlock) login(id int, email string, password string, tableName s
 		return nil, errors.New("Login Failed")
 	}
 
-	user.CacheToken = token
-	if token == "" {
-		user.CacheToken = ULID()
-	}
+	user.CacheToken = ULID()
 	user.TableName = tableName
+	user.Token = token
 	// save the new sessionToken into the database so it can be cleared from the cache later if the user gets deleted
 
 	jsonUser, err := json.Marshal(user)
@@ -187,7 +187,8 @@ func (padlock *Padlock) login(id int, email string, password string, tableName s
 	info.Token = Encrypt(string(jsonUser))
 
 	var duration time.Duration
-	if expiresIn == 0 {
+	var expiration time.Time
+	if token == nil {
 		expirationInDays := 30 //default
 		expirationDayEnv := os.Getenv("SECURITY_USER_TOKEN_EXPIRATION")
 		if expirationDayEnv != "" {
@@ -195,24 +196,12 @@ func (padlock *Padlock) login(id int, email string, password string, tableName s
 		}
 
 		duration = time.Duration(expirationInDays) * (24 * time.Hour)
+		expiration = time.Now().Add(duration)
 	} else {
-		duration = time.Duration(expiresIn) * time.Second
+		expiration = token.Expiry
 	}
-	expiration := time.Now().Add(duration)
 	info.Expiration = expiration
 	info.CacheToken = user.CacheToken
-
-	// // we need to expire any exist LOGOUT EVERYWHERE
-	// var expireTokens UserSessionTokens
-	// err = padlock.Store.DB.
-	// 	Select("*").
-	// 	From("usersession_token").
-	// 	Where("tablename = $1 and recordID = $2", tableName, user.ID).
-	// 	QueryStructs(&expireTokens)
-
-	// for _, tok := range expireTokens {
-	// 	tok.CacheToken
-	// }
 
 	_, err = padlock.Store.DB.
 		InsertInto("usersession_token").
