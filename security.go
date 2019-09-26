@@ -100,7 +100,7 @@ func NewWithToken(token string, store *datastore.Datastore) *Padlock {
 }
 
 func (padlock *Padlock) LoginReturningInfo(email string, password string, tableName string) (*SessionInfo, error) {
-	return padlock.LoginReturningInfoEx(-1, email, password, tableName)
+	return padlock.login(-1, email, password, tableName, "", 0)
 }
 
 // BypassLoginReturningCookie gets a login cookie without needing user name and password,
@@ -109,7 +109,7 @@ func (padlock *Padlock) LoginReturningInfo(email string, password string, tableN
 // THIS SHOULD NOT BE USED FROM A REQUEST VARIABLE i.e. pass ID and login, we NEED TO CHECK THERE PASSWORD or FACEBOOK AUTH ETC
 func (padlock *Padlock) BypassLoginReturningCookie(id int, tableName string) (*http.Cookie, error) {
 	tokenName := getSessionUserCookieName()
-	sessionInfo, err := padlock.LoginReturningInfoEx(id, "", "", tableName) // same process / different format
+	sessionInfo, err := padlock.login(id, "", "", tableName, "", 0) // same process / different format
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +128,11 @@ func (padlock *Padlock) LoginReturningCookie(email string, password string, tabl
 	return cookie, nil
 }
 
-func (padlock *Padlock) LoginReturningInfoEx(id int, email string, password string, tableName string) (*SessionInfo, error) {
+func (padlock *Padlock) LoginWithToken(id int, tableName string, token string, expiresIn int) (*SessionInfo, error) {
+	return padlock.login(id, "", "", tableName, token, expiresIn)
+}
+
+func (padlock *Padlock) login(id int, email string, password string, tableName string, token string, expiresIn int) (*SessionInfo, error) {
 	info := &SessionInfo{}
 	user := &SessionUser{}
 
@@ -168,7 +172,10 @@ func (padlock *Padlock) LoginReturningInfoEx(id int, email string, password stri
 		return nil, errors.New("Login Failed")
 	}
 
-	user.CacheToken = ULID()
+	user.CacheToken = token
+	if token == "" {
+		user.CacheToken = ULID()
+	}
 	user.TableName = tableName
 	// save the new sessionToken into the database so it can be cleared from the cache later if the user gets deleted
 
@@ -179,13 +186,18 @@ func (padlock *Padlock) LoginReturningInfoEx(id int, email string, password stri
 
 	info.Token = Encrypt(string(jsonUser))
 
-	expirationInDays := 30 //default
-	expirationDayEnv := os.Getenv("SECURITY_USER_TOKEN_EXPIRATION")
-	if expirationDayEnv != "" {
-		expirationInDays, _ = strconv.Atoi(expirationDayEnv) // if it can't convert then just use the default
-	}
+	var duration time.Duration
+	if expiresIn == 0 {
+		expirationInDays := 30 //default
+		expirationDayEnv := os.Getenv("SECURITY_USER_TOKEN_EXPIRATION")
+		if expirationDayEnv != "" {
+			expirationInDays, _ = strconv.Atoi(expirationDayEnv) // if it can't convert then just use the default
+		}
 
-	duration := time.Duration(expirationInDays) * (24 * time.Hour)
+		duration = time.Duration(expirationInDays) * (24 * time.Hour)
+	} else {
+		duration = time.Duration(expiresIn) * time.Second
+	}
 	expiration := time.Now().Add(duration)
 	info.Expiration = expiration
 	info.CacheToken = user.CacheToken
