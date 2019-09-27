@@ -196,10 +196,10 @@ func (padlock *Padlock) login(id int, email string, password string, tableName s
 		}
 
 		duration = time.Duration(expirationInDays) * (24 * time.Hour)
-		expiration = time.Now().Add(duration)
 	} else {
-		expiration = token.Expiry
+		duration = time.Now().Sub(token.Expiry)
 	}
+	expiration = time.Now().Add(duration)
 	info.Expiration = expiration
 	info.CacheToken = user.CacheToken
 
