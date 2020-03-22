@@ -230,7 +230,7 @@ func (padlock *Padlock) SiteID() int {
 	if padlock.siteID > 0 {
 		return padlock.siteID
 	}
-	if padlock.Settings.GetBool("IsSiteBound") {
+	if padlock.Settings.GetBool("IS_SITE_BOUND") {
 		if padlock.IsLoggedIn() {
 			user, _, _ := padlock.LoggedInUser()
 			if user.SiteID < 1 {
