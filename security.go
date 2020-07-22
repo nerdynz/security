@@ -53,7 +53,7 @@ type SessionUser struct {
 	Initials string `db:"initials" json:"Initials"`
 	SiteID   int    `db:"site_id" json:"SiteID,omitempty"`
 	ULID     string `db:"ulid" json:"ULID,omitempty"`
-	SiteULID string `db:"site_ulid" json:"ULID,omitempty"`
+	SiteULID string `db:"site_ulid" json:"SiteULID,omitempty"`
 }
 
 type Padlock struct {
