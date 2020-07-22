@@ -245,6 +245,24 @@ func (padlock *Padlock) SiteID() int {
 	panic("IS_SITE_BOUND not set")
 }
 
+func (padlock *Padlock) SiteULID() (string, error) {
+	// optimise
+	if padlock.loggedInUser != nil {
+		return padlock.loggedInUser.SiteULID, nil
+	}
+	if padlock.Settings.GetBool("IS_SITE_BOUND") {
+		if padlock.IsLoggedIn() {
+			user, _, _ := padlock.LoggedInUser()
+			if user.SiteULID == "" {
+				return "", errors.New("Invalid user site_ulid")
+			}
+			return user.SiteULID, nil
+		}
+		return "", errors.New("site ulid accessed without being logged in")
+	}
+	return "", errors.New("IS_SITE_BOUND not set")
+}
+
 func (padlock *Padlock) IsLoggedIn() bool {
 	user, _, _ := padlock.LoggedInUser()
 	return user != nil
