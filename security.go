@@ -1,6 +1,7 @@
 package security
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -28,7 +29,8 @@ const (
 	// Redirect value will force the router to redirect to the /Login route
 	Redirect = "redirect"
 	// Disallow will return a 403 Forbbiden response
-	Disallow = "disallow"
+	Disallow           = "disallow"
+	TempNoAuthDisallow = "none"
 
 	// // Redis as the storage location for checking login valid
 	// Redis = "Redis"
@@ -36,29 +38,63 @@ const (
 	// Database = "Database"
 )
 
+type SessionLoginAttempt struct {
+	Email    string `db:"email" json:"email,omitempty"`
+	Password string `db:"password" json:"password,omitempty"`
+	SiteULID string `db:"site_ulid" json:"siteULID,omitempty"`
+}
+
+func LoginAttemptFromRequest(req *http.Request) (*SessionLoginAttempt, error) {
+	loginAttempt := &SessionLoginAttempt{}
+	if strings.Contains(req.Header.Get("Content-Type"), "application/json") {
+		// working with json
+		decoder := json.NewDecoder(req.Body)
+		err := decoder.Decode(loginAttempt)
+		if err != nil {
+			return nil, err
+		}
+		return loginAttempt, nil
+	}
+	return nil, errors.New("unable to parse login attempt from that content type")
+}
+
 type SessionInfo struct {
 	User       *SessionUser `json:"user"`
 	Token      string       `json:"token"`
 	Expiration time.Time    `json:"expiration"`
+	Sites      []*Site      `json:"sites"`
 }
 
 type SessionUser struct {
-	ID       int    `db:"id" json:"ID"`
-	Username string `db:"username" json:"Username,omitempty"`
-	Name     string `db:"name" json:"Name"`
-	Email    string `db:"email" json:"Email"`
+	Username string `db:"username" json:"username,omitempty"`
+	Name     string `db:"name" json:"name"`
+	Email    string `db:"email" json:"email"`
 	Password string `db:"password" json:"-"`
-	Role     string `db:"role" json:"Role"`
-	Picture  string `db:"picture" json:"Picture"`
-	Initials string `db:"initials" json:"Initials"`
-	SiteID   int    `db:"site_id" json:"SiteID,omitempty"`
-	ULID     string `db:"ulid" json:"ULID,omitempty"`
-	SiteULID string `db:"site_ulid" json:"SiteULID,omitempty"`
+	Role     string `db:"role" json:"role"`
+	Picture  string `db:"picture" json:"picture"`
+	Initials string `db:"initials" json:"initials"`
+	ULID     string `db:"ulid" json:"ulid,omitempty"`
+	SiteULID string `db:"site_ulid" json:"siteULID,omitempty"`
+}
+
+type Site struct {
+	Name     string `db:"name" json:"name"`
+	SiteULID string `db:"site_ulid" json:"siteULID,omitempty"`
+}
+
+type NotAuthorizedUser struct {
+	Username string `db:"username"`
+	Email    string `db:"email"`
+	Password string `db:"password"`
+	Role     string `db:"role"`
+	ULID     string `db:"ulid"`
+	SiteULID string `db:"site_ulid"`
 }
 
 type Padlock struct {
-	Req      *http.Request
-	Settings Settings
+	ctx      context.Context
+	req      *http.Request
+	settings Settings
 	key      Key
 	// Cache        Cache
 	token        string
@@ -87,15 +123,23 @@ type Padlock struct {
 // TODO REFACTOR... Bad naming
 // func NewWithContext(ctx *flow.Context) *Padlock {
 // 	padlock := &Padlock{}
-// 	padlock.Req = ctx.Req
+// 	padlock.req = ctx.Req
 // 	padlock.Store = ctx.Store
 // 	return padlock
 // }
 
 func New(req *http.Request, settings Settings, key Key) *Padlock {
 	padlock := &Padlock{}
-	padlock.Req = req
-	padlock.Settings = settings
+	padlock.req = req
+	padlock.settings = settings
+	padlock.key = key
+	return padlock
+}
+
+func NewFromContext(ctx context.Context, key Key) *Padlock {
+	padlock := &Padlock{}
+	padlock.ctx = ctx
+	// padlock.settings = settings
 	padlock.key = key
 	return padlock
 }
@@ -130,54 +174,68 @@ func (padlock *Padlock) SetCachedValue(key string, value []byte, duration time.D
 // for example user has just signed up, meaning we of course know they are valid
 // or we have logged in via facebook oauth
 // THIS SHOULD NOT BE USED FROM A REQUEST VARIABLE i.e. pass ID and login, we NEED TO CHECK THERE PASSWORD or FACEBOOK AUTH ETC
-func (padlock *Padlock) BypassLoginReturningCookie(id int) (*http.Cookie, error) {
-	tokenName := getSessionUserCookieName(padlock.Settings)
-	sessionInfo, err := padlock.LoginWithID(id) // same process / different format
+func (padlock *Padlock) BypassLoginReturningCookie(ulid string) (*http.Cookie, error) {
+	tokenName := getSessionUserCookieName(padlock.settings)
+	sessionInfo, err := padlock.LoginWithULID(ulid) // same process / different format
 	if err != nil {
 		return nil, err
 	}
-	cookie := &http.Cookie{Name: tokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.Req.Host}
+	cookie := &http.Cookie{Name: tokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.req.Host}
 	return cookie, nil
 }
 
 func (padlock *Padlock) LoginReturningCookie(email string, password string) (*http.Cookie, error) {
-	tokenName := getSessionUserCookieName(padlock.Settings)
+	tokenName := getSessionUserCookieName(padlock.settings)
 
 	sessionInfo, err := padlock.LoginReturningInfo(email, password) // same process / different format
 	if err != nil {
 		return nil, err
 	}
-	cookie := &http.Cookie{Name: tokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.Req.Host}
+	cookie := &http.Cookie{Name: tokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.req.Host}
 	return cookie, nil
 }
 
+func (padlock *Padlock) LoginFromRequest(req *http.Request) (*SessionInfo, error) {
+	attempt, err := LoginAttemptFromRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	return padlock.loginDefaultDuration("", attempt.Email, attempt.Password, attempt.SiteULID)
+}
+
 func (padlock *Padlock) LoginReturningInfo(email string, password string) (*SessionInfo, error) {
-	return padlock.loginNoDuration(-1, email, password)
+	return padlock.loginDefaultDuration("", email, password, "")
 }
 
-func (padlock *Padlock) LoginWithID(id int) (*SessionInfo, error) {
-	return padlock.loginNoDuration(id, "", "")
+// LoginToSiteReturningInfo for multi tenant users, we pass a specific site ID
+func (padlock *Padlock) LoginToSiteReturningInfo(email string, password string, siteULID string) (*SessionInfo, error) {
+	return padlock.loginDefaultDuration("", email, password, siteULID)
 }
 
-func (padlock *Padlock) loginNoDuration(id int, email string, password string) (*SessionInfo, error) {
+func (padlock *Padlock) LoginWithULID(ulid string) (*SessionInfo, error) {
+	return padlock.loginDefaultDuration(ulid, "", "", "")
+}
+
+func (padlock *Padlock) loginDefaultDuration(ulid string, email string, password string, optionalSiteULID string) (*SessionInfo, error) {
 	expirationInDays := 30 //default
-	expirationDayEnv := padlock.Settings.Get("SECURITY_USER_TOKEN_EXPIRATION")
+	expirationDayEnv := padlock.settings.Get("SECURITY_USER_TOKEN_EXPIRATION")
 	if expirationDayEnv != "" {
 		expirationInDays, _ = strconv.Atoi(expirationDayEnv) // if it can't convert then just use the default
 	}
 	duration := time.Duration(expirationInDays) * (24 * time.Hour)
-	return padlock.Login(id, email, password, duration)
+	return padlock.login(ulid, email, password, optionalSiteULID, duration)
 }
 
-func (padlock *Padlock) Login(id int, email string, password string, duration time.Duration) (*SessionInfo, error) {
-	if password == "" && id <= 0 {
-		return nil, errors.New("Password can't be blank")
+//
+func (padlock *Padlock) login(ulid string, email string, password string, optionalSiteULID string, duration time.Duration) (*SessionInfo, error) {
+	if password == "" && ulid == "" {
+		return nil, errors.New("password must be provided")
 	}
 
-	fakeUser := &SessionUser{}
-	fakeUser.ID = id
+	fakeUser := &NotAuthorizedUser{}
 	fakeUser.Email = email
 	fakeUser.Password = password
+	fakeUser.SiteULID = optionalSiteULID
 
 	info := &SessionInfo{}
 
@@ -186,8 +244,8 @@ func (padlock *Padlock) Login(id int, email string, password string, duration ti
 		return nil, err
 	}
 
-	if user.Email == "" && user.Username == "" && id <= 0 {
-		return nil, errors.New("Email or Username can't be blank")
+	if user.Email == "" && user.Username == "" && ulid == "" {
+		return nil, errors.New("Email must be provided")
 	}
 
 	// var duration time.Duration
@@ -205,7 +263,12 @@ func (padlock *Padlock) Login(id int, email string, password string, duration ti
 
 	info.Expiration = time.Now().Add(duration)
 	info.User = user
-	info.Token = Encrypt(strconv.Itoa(user.ID))
+	if user.ULID != "" {
+		info.Token = Encrypt(user.ULID)
+	}
+	if info.Token == "" {
+		return nil, errors.New("Invalid token")
+	}
 
 	// _, err = padlock.Store.DB.
 	// 	InsertInto("usersession_token").
@@ -223,26 +286,15 @@ func (padlock *Padlock) Login(id int, email string, password string, duration ti
 	}
 
 	padlock.cacheLogin(info.User, info.Token)
-	return info, nil
-}
 
-func (padlock *Padlock) SiteID() int {
-	// optimise
-	if padlock.siteID > 0 {
-		return padlock.siteID
+	// make sure we are fully logged in then also check for other sites we may belong to
+	sites, err := padlock.key.GetSites(info.User.Email) // dont care about this error
+	if err != nil {
+		return nil, err
 	}
-	if padlock.Settings.GetBool("IS_SITE_BOUND") {
-		if padlock.IsLoggedIn() {
-			user, _, _ := padlock.LoggedInUser()
-			if user.SiteID < 1 {
-				panic("Invalid siteID")
-			}
-			padlock.siteID = user.SiteID
-			return user.SiteID
-		}
-		panic("SiteID accessed without being logged in")
-	}
-	panic("IS_SITE_BOUND not set")
+	info.Sites = sites
+
+	return info, nil
 }
 
 func (padlock *Padlock) SiteULID() (string, error) {
@@ -250,17 +302,14 @@ func (padlock *Padlock) SiteULID() (string, error) {
 	if padlock.loggedInUser != nil {
 		return padlock.loggedInUser.SiteULID, nil
 	}
-	if padlock.Settings.GetBool("IS_SITE_BOUND") {
-		if padlock.IsLoggedIn() {
-			user, _, _ := padlock.LoggedInUser()
-			if user.SiteULID == "" {
-				return "", errors.New("Invalid user site_ulid")
-			}
-			return user.SiteULID, nil
+	if padlock.IsLoggedIn() {
+		user, _, _ := padlock.LoggedInUser()
+		if user.SiteULID == "" {
+			return "", errors.New("Invalid user site_ulid")
 		}
-		return "", errors.New("site ulid accessed without being logged in")
+		return user.SiteULID, nil
 	}
-	return "", errors.New("IS_SITE_BOUND not set")
+	return "", errors.New("Site ulid accessed without being logged in")
 }
 
 func (padlock *Padlock) IsLoggedIn() bool {
@@ -297,54 +346,60 @@ func (padlock *Padlock) UpdateAuthToken(tok string) {
 }
 
 func (padlock *Padlock) GetAuthToken() (authToken string, err error) {
-	// check for basic authentication header
 	authToken = padlock.token // we already have it
 
-	// check the request header
-	if authToken == "" {
-		authHeader := padlock.Req.Header.Get("Authorization")
-		if authHeader != "" {
-			// potentially found a token in the Authorization header
-			authTokenBits := strings.Split(authHeader, "Basic ")
-			if len(authTokenBits) == 1 {
-				return "", errors.New("invalid auth token")
-			}
-			authToken = authTokenBits[1]
-		}
+	// check for basic authentication header
+	authHeader := ""
+	if padlock.ctx != nil {
+		authHeader = padlock.ctx.Value("authorization").(string)
+	}
+	if padlock.req != nil {
+		authHeader = padlock.req.Header.Get("Authorization")
+	}
+	if authHeader != "" {
+		// potentially found a token in the Authorization header
+		return tokenFromAuthorizationHeader(authHeader)
 	}
 
-	// we still haven't found the authtoken so try checking a cookie
-	if authToken == "" {
-		authToken = padlock.Req.URL.Query().Get("authtoken")
-	}
-	// we still haven't got it so check via key interface
-	if authToken == "" {
-		authToken, err = padlock.key.GetAuthToken(padlock.Req)
-		if err != nil {
-			return "", err
+	// token is passed directly
+	if padlock.req != nil {
+		// check the request header
+
+		// we still haven't found the authtoken so try checking a cookie
+		if authToken == "" {
+			authToken = padlock.req.URL.Query().Get("authtoken")
 		}
-	}
-	// we still haven't found the authtoken so try checking a cookie
-	if authToken == "" {
-		tokenName := getSessionUserCookieName(padlock.Settings)
-		cookie, err := padlock.Req.Cookie(tokenName)
-		if err != nil {
-			if err.Error() == "http: named cookie not present" {
-				return "", errors.New("no auth details found in the request")
+		// we still haven't got it so check via key interface
+		if authToken == "" {
+			authToken, err = padlock.key.GetAuthToken(padlock.req)
+			if err != nil {
+				return "", err
 			}
-			return "", err
 		}
-		authToken = cookie.Value
+		// we still haven't found the authtoken so try checking a cookie
+		if authToken == "" {
+			tokenName := getSessionUserCookieName(padlock.settings)
+			cookie, err := padlock.req.Cookie(tokenName)
+			if err != nil {
+				if err.Error() == "http: named cookie not present" {
+					return "", errors.New("no auth details found in the request")
+				}
+				return "", err
+			}
+			authToken = cookie.Value
+		}
+		return authToken, nil
 	}
-	return authToken, nil
+
+	return "", errors.New("Unauthorised")
 }
 
-func (padlock *Padlock) LoggedInUserID() int {
+func (padlock *Padlock) LoggedInUserULID() (string, error) {
 	user, _, err := padlock.LoggedInUser()
 	if err != nil {
-		return -1
+		return "", err
 	}
-	return user.ID
+	return user.ULID, nil
 }
 
 func (padlock *Padlock) cacheLogin(user *SessionUser, authToken string) {
@@ -462,11 +517,18 @@ func ULID() string {
 }
 
 func getSessionUserCookieName(settings Settings) string {
-	tokenName := settings.Get("SECURITY_USER_COOKIE_NAME")
+	tokenName := ""
+	if settings != nil {
+		tokenName = settings.Get("SECURITY_USER_COOKIE_NAME")
+	}
 	if tokenName == "" {
 		tokenName = "user_cookie"
 	}
 	return tokenName
+}
+
+func (padlock *Padlock) Sites(email string) ([]*Site, error) {
+	return padlock.key.GetSites(email)
 }
 
 type Settings interface {
@@ -479,10 +541,11 @@ type Key interface {
 	GetLogin(cacheKey string) (*SessionInfo, error)
 	SetLogin(cacheKey string, value *SessionInfo, duration time.Duration) error
 	ExpireLoggedInUser(key string) error
-	DoLogin(notLoggedInUser *SessionUser) (*SessionUser, error)
+	DoLogin(notLoggedInUser *NotAuthorizedUser) (*SessionUser, error)
 	SetCacheValue(userkey string, key string, value []byte, duration time.Duration) error
 	GetCacheValue(userkey string, key string) ([]byte, error)
 	GetAuthToken(*http.Request) (string, error)
+	GetSites(email string) ([]*Site, error)
 }
 
 type BasicKey struct {
@@ -524,4 +587,12 @@ func (k *BasicKey) SetCacheValue(userkey string, key string, value interface{}, 
 }
 func (k *BasicKey) GetCacheValue(userkey string, key string) ([]byte, error) {
 	return nil, errors.New("You need to implement a cache getter here. Perhaps redis :_")
+}
+
+func tokenFromAuthorizationHeader(authHeader string) (string, error) {
+	authTokenBits := strings.Split(authHeader, "Basic ")
+	if len(authTokenBits) == 1 {
+		return "", errors.New("invalid auth token")
+	}
+	return authTokenBits[1], nil
 }
