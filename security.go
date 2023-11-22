@@ -136,10 +136,10 @@ func New(req *http.Request, settings Settings, key Key) *Padlock {
 	return padlock
 }
 
-func NewFromContext(ctx context.Context, key Key) *Padlock {
+func NewFromContext(ctx context.Context, settings Settings, key Key) *Padlock {
 	padlock := &Padlock{}
 	padlock.ctx = ctx
-	// padlock.settings = settings
+	padlock.settings = settings
 	padlock.key = key
 	return padlock
 }
@@ -365,7 +365,7 @@ func (padlock *Padlock) GetAuthToken() (authToken string, err error) {
 	if padlock.req != nil {
 		// check the request header
 
-		// we still haven't found the authtoken so try checking a cookie
+		// we still haven't found the authtoken so try a url
 		if authToken == "" {
 			authToken = padlock.req.URL.Query().Get("authtoken")
 		}
