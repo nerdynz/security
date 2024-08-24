@@ -66,6 +66,7 @@ type SessionInfo struct {
 }
 
 type SessionUser struct {
+	ID       int    `db:"id" json:"id,omitempty"`
 	Username string `db:"username" json:"username,omitempty"`
 	Name     string `db:"name" json:"name"`
 	Email    string `db:"email" json:"email"`
@@ -123,7 +124,7 @@ type Padlock struct {
 // TODO REFACTOR... Bad naming
 // func NewWithContext(ctx *flow.Context) *Padlock {
 // 	padlock := &Padlock{}
-// 	padlock.req = ctx.Req
+// 	padlock.req = req
 // 	padlock.Store = ctx.Store
 // 	return padlock
 // }
@@ -136,23 +137,27 @@ func New(req *http.Request, settings Settings, key Key) *Padlock {
 	return padlock
 }
 
-func NewFromContext(ctx context.Context, key Key) *Padlock {
+func NewFromContext(ctx context.Context, settings Settings, key Key) *Padlock {
 	padlock := &Padlock{}
 	padlock.ctx = ctx
-	// padlock.settings = settings
+	padlock.settings = settings
 	padlock.key = key
 	return padlock
 }
 
 // NewWithToken - doesnt rely on request, current usecase is websockets... im sure there are more
-// func NewWithToken(token string) *Padlock {
-// 	padlock := &Padlock{}
-// 	padlock.token = token
-// 	// padlock.Store = store
-// 	return padlock
-// }
+//
+//	func NewWithToken(token string) *Padlock {
+//		padlock := &Padlock{}
+//		padlock.token = token
+//		// padlock.Store = store
+//		return padlock
+//	}
+func (padlock *Padlock) UserCachedValue(key string) ([]byte, error) {
+	return padlock.GetCachedValue(key)
+}
 
-// GetCachedValue put other relevant stuff against the user here, such as an authtoken etc
+// Deprecated: bad naming and non idomatic. user UserCachedValue instead
 func (padlock *Padlock) GetCachedValue(key string) ([]byte, error) {
 	_, authToken, err := padlock.LoggedInUser()
 	if err != nil {
@@ -226,13 +231,13 @@ func (padlock *Padlock) loginDefaultDuration(ulid string, email string, password
 	return padlock.login(ulid, email, password, optionalSiteULID, duration)
 }
 
-//
 func (padlock *Padlock) login(ulid string, email string, password string, optionalSiteULID string, duration time.Duration) (*SessionInfo, error) {
 	if password == "" && ulid == "" {
 		return nil, errors.New("password must be provided")
 	}
 
 	fakeUser := &NotAuthorizedUser{}
+	fakeUser.ULID = ulid
 	fakeUser.Email = email
 	fakeUser.Password = password
 	fakeUser.SiteULID = optionalSiteULID
@@ -263,9 +268,10 @@ func (padlock *Padlock) login(ulid string, email string, password string, option
 
 	info.Expiration = time.Now().Add(duration)
 	info.User = user
-	if user.ULID != "" {
-		info.Token = Encrypt(user.ULID)
+	if user.ULID == "" {
+		return nil, errors.New("Invalid user ulid. is your Key decoding ulid correctly")
 	}
+	info.Token = Encrypt(user.ULID)
 	if info.Token == "" {
 		return nil, errors.New("Invalid token")
 	}
@@ -288,10 +294,10 @@ func (padlock *Padlock) login(ulid string, email string, password string, option
 	padlock.cacheLogin(info.User, info.Token)
 
 	// make sure we are fully logged in then also check for other sites we may belong to
-	sites, err := padlock.key.GetSites(info.User.Email) // dont care about this error
-	if err != nil {
-		return nil, err
-	}
+	sites, _ := padlock.key.GetSites(info.User.Email) // dont care about this error
+	// if err != nil {
+	// 	return nil, err
+	// }
 	info.Sites = sites
 
 	return info, nil
@@ -402,6 +408,14 @@ func (padlock *Padlock) LoggedInUserULID() (string, error) {
 	return user.ULID, nil
 }
 
+func (padlock *Padlock) LoggedInUserID() int {
+	user, _, err := padlock.LoggedInUser()
+	if err != nil {
+		return -1
+	}
+	return user.ID
+}
+
 func (padlock *Padlock) cacheLogin(user *SessionUser, authToken string) {
 	padlock.loggedInUser = user
 	padlock.authToken = authToken
@@ -417,7 +431,6 @@ func (padlock *Padlock) LoggedInUser() (user *SessionUser, authToken string, err
 		return nil, "", err
 	}
 
-	user = &SessionUser{}
 	info, err := padlock.key.GetLogin(authToken)
 	if err != nil {
 		return nil, "", err
