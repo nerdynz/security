@@ -371,7 +371,7 @@ func (padlock *Padlock) GetAuthToken() (authToken string, err error) {
 	if padlock.req != nil {
 		// check the request header
 
-		// we still haven't found the authtoken so try checking a cookie
+		// we still haven't found the authtoken so try a url
 		if authToken == "" {
 			authToken = padlock.req.URL.Query().Get("authtoken")
 		}
