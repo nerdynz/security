@@ -139,11 +139,13 @@ func RegisterKey(k Key) {
 
 func New(req *http.Request) (*Padlock, error) {
 	padlock := &Padlock{}
-	padlock.req = req
 	key, err := checkKey()
 	if err != nil {
 		return nil, err
 	}
+
+	padlock.req = req
+	padlock.ctx = req.Context()
 	padlock.key = key
 	return padlock, nil
 }
@@ -230,6 +232,7 @@ func (padlock *Padlock) loginDefaultDuration(ulid string, email string, password
 }
 
 func (padlock *Padlock) login(ulid string, email string, password string, optionalSiteULID string, duration time.Duration) (*SessionInfo, error) {
+
 	if password == "" && ulid == "" {
 		return nil, errors.New("password must be provided")
 	}
@@ -242,7 +245,7 @@ func (padlock *Padlock) login(ulid string, email string, password string, option
 
 	info := &SessionInfo{}
 
-	user, err := padlock.key.DoLogin(fakeUser)
+	user, err := padlock.key.DoLogin(padlock.ctx, fakeUser)
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +515,7 @@ type Key interface {
 	GetLogin(cacheKey string) (*SessionInfo, error)
 	SetLogin(cacheKey string, value *SessionInfo, duration time.Duration) error
 	ExpireLoggedInUser(key string) error
-	DoLogin(notLoggedInUser *NotAuthorizedUser) (*SessionUser, error)
+	DoLogin(context context.Context, notLoggedInUser *NotAuthorizedUser) (*SessionUser, error)
 	SetCacheValue(userkey string, key string, value []byte, duration time.Duration) error
 	GetCacheValue(userkey string, key string) ([]byte, error)
 	GetAuthToken(*http.Request) (string, error)
