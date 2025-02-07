@@ -11,10 +11,11 @@ import (
 	"io"
 	mathRand "math/rand"
 	"net/http"
-	"strconv"
 	"time"
 
-	"github.com/oklog/ulid"
+	"log/slog"
+
+	"github.com/oklog/ulid/v2"
 
 	"os"
 
@@ -55,6 +56,17 @@ func LoginAttemptFromRequest(req *http.Request) (*SessionLoginAttempt, error) {
 		}
 		return loginAttempt, nil
 	}
+
+	e := req.FormValue("email")
+	if e == "" {
+		e = req.FormValue("username")
+	}
+	p := req.FormValue("password")
+	if len(e) > 0 && len(p) > 0 {
+		loginAttempt.Email = e
+		loginAttempt.Password = p
+		return loginAttempt, nil
+	}
 	return nil, errors.New("unable to parse login attempt from that content type")
 }
 
@@ -93,10 +105,9 @@ type NotAuthorizedUser struct {
 }
 
 type Padlock struct {
-	ctx      context.Context
-	req      *http.Request
-	settings Settings
-	key      Key
+	ctx context.Context
+	req *http.Request
+	key Key
 	// Cache        Cache
 	token        string
 	siteID       int
@@ -104,55 +115,46 @@ type Padlock struct {
 	authToken    string
 }
 
-// type Cache interface {
-// 	GetCacheBytes(key string) ([]byte, error)
-// 	GetCacheValue(key string) (string, error)
-// 	SetCacheValue(key string, value interface{}, duration time.Duration) (string, error)
-// }
+type DefaultPadlockOptions struct {
+	DefaultTokenExpirationDays int
+	DefaultTokenName           string
+}
 
-// type UserSessionToken struct {
-// 	CacheToken   string    `db:"cache_token"`
-// 	TableName    string    `db:"table_name"`
-// 	RecordID     int       `db:"record_id"`
-// 	ExpiryDate   time.Time `db:"expiry_date"`
-// 	DateCreated  time.Time `db:"date_created"`
-// 	DateModified time.Time `db:"date_modified"`
-// }
+var key Key
+var defaultOptions = &DefaultPadlockOptions{
+	DefaultTokenExpirationDays: 30,
+	DefaultTokenName:           "UserCookie",
+}
 
-// type UserSessionTokens []*UserSessionToken
+func checkKey() (Key, error) {
+	if key == nil {
+		return nil, errors.New("security.RegisterKey has not being called")
+	}
+	return key, nil
+}
 
-// TODO REFACTOR... Bad naming
-// func NewWithContext(ctx *flow.Context) *Padlock {
-// 	padlock := &Padlock{}
-// 	padlock.req = req
-// 	padlock.Store = ctx.Store
-// 	return padlock
-// }
-
-func New(req *http.Request, settings Settings, key Key) *Padlock {
+func New(req *http.Request) (*Padlock, error) {
 	padlock := &Padlock{}
 	padlock.req = req
-	padlock.settings = settings
+	key, err := checkKey()
+	if err != nil {
+		return nil, err
+	}
 	padlock.key = key
-	return padlock
+	return padlock, nil
 }
 
-func NewFromContext(ctx context.Context, settings Settings, key Key) *Padlock {
+func NewFromContext(ctx context.Context) (*Padlock, error) {
 	padlock := &Padlock{}
 	padlock.ctx = ctx
-	padlock.settings = settings
+	key, err := checkKey()
+	if err != nil {
+		return nil, err
+	}
 	padlock.key = key
-	return padlock
+	return padlock, nil
 }
 
-// NewWithToken - doesnt rely on request, current usecase is websockets... im sure there are more
-//
-//	func NewWithToken(token string) *Padlock {
-//		padlock := &Padlock{}
-//		padlock.token = token
-//		// padlock.Store = store
-//		return padlock
-//	}
 func (padlock *Padlock) UserCachedValue(key string) ([]byte, error) {
 	return padlock.GetCachedValue(key)
 }
@@ -180,23 +182,20 @@ func (padlock *Padlock) SetCachedValue(key string, value []byte, duration time.D
 // or we have logged in via facebook oauth
 // THIS SHOULD NOT BE USED FROM A REQUEST VARIABLE i.e. pass ID and login, we NEED TO CHECK THERE PASSWORD or FACEBOOK AUTH ETC
 func (padlock *Padlock) BypassLoginReturningCookie(ulid string) (*http.Cookie, error) {
-	tokenName := getSessionUserCookieName(padlock.settings)
 	sessionInfo, err := padlock.LoginWithULID(ulid) // same process / different format
 	if err != nil {
 		return nil, err
 	}
-	cookie := &http.Cookie{Name: tokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.req.Host}
+	cookie := &http.Cookie{Name: defaultOptions.DefaultTokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.req.Host}
 	return cookie, nil
 }
 
 func (padlock *Padlock) LoginReturningCookie(email string, password string) (*http.Cookie, error) {
-	tokenName := getSessionUserCookieName(padlock.settings)
-
 	sessionInfo, err := padlock.LoginReturningInfo(email, password) // same process / different format
 	if err != nil {
 		return nil, err
 	}
-	cookie := &http.Cookie{Name: tokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.req.Host}
+	cookie := &http.Cookie{Name: defaultOptions.DefaultTokenName, Value: sessionInfo.Token, Expires: sessionInfo.Expiration, Path: "/", Domain: padlock.req.Host}
 	return cookie, nil
 }
 
@@ -222,12 +221,7 @@ func (padlock *Padlock) LoginWithULID(ulid string) (*SessionInfo, error) {
 }
 
 func (padlock *Padlock) loginDefaultDuration(ulid string, email string, password string, optionalSiteULID string) (*SessionInfo, error) {
-	expirationInDays := 30 //default
-	expirationDayEnv := padlock.settings.Get("SECURITY_USER_TOKEN_EXPIRATION")
-	if expirationDayEnv != "" {
-		expirationInDays, _ = strconv.Atoi(expirationDayEnv) // if it can't convert then just use the default
-	}
-	duration := time.Duration(expirationInDays) * (24 * time.Hour)
+	duration := time.Duration(defaultOptions.DefaultTokenExpirationDays) * (24 * time.Hour)
 	return padlock.login(ulid, email, password, optionalSiteULID, duration)
 }
 
@@ -253,19 +247,6 @@ func (padlock *Padlock) login(ulid string, email string, password string, option
 		return nil, errors.New("Email must be provided")
 	}
 
-	// var duration time.Duration
-	// if token == nil {
-	// 	expirationInDays := 30 //default
-	// 	expirationDayEnv := os.Getenv("SECURITY_USER_TOKEN_EXPIRATION")
-	// 	if expirationDayEnv != "" {
-	// 		expirationInDays, _ = strconv.Atoi(expirationDayEnv) // if it can't convert then just use the default
-	// 	}
-
-	// 	duration = time.Duration(expirationInDays) * (24 * time.Hour)
-	// } else {
-	// 	duration = time.Now().Sub(token.Expiry)
-	// }
-
 	info.Expiration = time.Now().Add(duration)
 	info.User = user
 	if user.ULID == "" {
@@ -275,16 +256,6 @@ func (padlock *Padlock) login(ulid string, email string, password string, option
 	if info.Token == "" {
 		return nil, errors.New("Invalid token")
 	}
-
-	// _, err = padlock.Store.DB.
-	// 	InsertInto("usersession_token").
-	// 	Columns("cache_token", "table_name", "record_id", "expiry_date", "date_created", "date_modified").
-	// 	Values(user.CacheToken, tableName, user.ID, expiration, time.Now(), time.Now()).
-	// 	Exec()
-
-	// if err != nil {
-	// 	return nil, err
-	// }
 
 	err = padlock.key.SetLogin(info.Token, info, duration)
 	if err != nil {
@@ -377,6 +348,7 @@ func (padlock *Padlock) GetAuthToken() (authToken string, err error) {
 		}
 		// we still haven't got it so check via key interface
 		if authToken == "" {
+			slog.Info("padlock.key", "is null", padlock.key == nil)
 			authToken, err = padlock.key.GetAuthToken(padlock.req)
 			if err != nil {
 				return "", err
@@ -384,8 +356,7 @@ func (padlock *Padlock) GetAuthToken() (authToken string, err error) {
 		}
 		// we still haven't found the authtoken so try checking a cookie
 		if authToken == "" {
-			tokenName := getSessionUserCookieName(padlock.settings)
-			cookie, err := padlock.req.Cookie(tokenName)
+			cookie, err := padlock.req.Cookie(defaultOptions.DefaultTokenName)
 			if err != nil {
 				if err.Error() == "http: named cookie not present" {
 					return "", errors.New("no auth details found in the request")
@@ -529,25 +500,8 @@ func ULID() string {
 	return u.String()
 }
 
-func getSessionUserCookieName(settings Settings) string {
-	tokenName := ""
-	if settings != nil {
-		tokenName = settings.Get("SECURITY_USER_COOKIE_NAME")
-	}
-	if tokenName == "" {
-		tokenName = "user_cookie"
-	}
-	return tokenName
-}
-
 func (padlock *Padlock) Sites(email string) ([]*Site, error) {
 	return padlock.key.GetSites(email)
-}
-
-type Settings interface {
-	Get(key string) string
-	GetBool(key string) bool
-	IsProduction() bool
 }
 
 type Key interface {
@@ -559,47 +513,6 @@ type Key interface {
 	GetCacheValue(userkey string, key string) ([]byte, error)
 	GetAuthToken(*http.Request) (string, error)
 	GetSites(email string) ([]*Site, error)
-}
-
-type BasicKey struct {
-}
-
-func (k *BasicKey) GetAuthToken(req *http.Request) (string, error) {
-	// there are some basic checks built in so this is an extension
-	return "", nil
-}
-
-func (k *BasicKey) GetLoggedInUser(authToken string) (*SessionUser, error) {
-	u := &SessionUser{}
-	blob, err := k.GetCacheValue("", authToken)
-	if err != nil {
-		return nil, err
-	}
-	err = json.Unmarshal(blob, u)
-	return u, err
-}
-
-func (k *BasicKey) SetLoggedInUser(authToken string, user *SessionUser, duration time.Duration) error {
-	ubts, err := json.Marshal(user)
-	if err != nil {
-		return err
-	}
-	return k.SetCacheValue("", authToken, ubts, duration) // we dont need to set a userkey for the login because this is our user key
-}
-
-func (k *BasicKey) ExpireLoggedInUser(key string) error {
-	dur := 1 * time.Second
-	return k.SetCacheValue("", key, nil, dur) // cya
-}
-
-func (k *BasicKey) doLogin(notLoggedInUser *SessionUser) (*SessionUser, error) {
-	return nil, errors.New("You need to implement some database or other logic to get a user from persistant storage")
-}
-func (k *BasicKey) SetCacheValue(userkey string, key string, value interface{}, duration time.Duration) error {
-	return errors.New("You need to implement a cache setter here. Perhaps redis :_")
-}
-func (k *BasicKey) GetCacheValue(userkey string, key string) ([]byte, error) {
-	return nil, errors.New("You need to implement a cache getter here. Perhaps redis :_")
 }
 
 func tokenFromAuthorizationHeader(authHeader string) (string, error) {
