@@ -335,7 +335,9 @@ func (padlock *Padlock) GetAuthToken() (authToken string, err error) {
 	// check for basic authentication header
 	authHeader := ""
 	if padlock.ctx != nil {
-		authHeader = padlock.ctx.Value("authorization").(string)
+		if ctxAuthHeader, ok := padlock.ctx.Value("authorization").(string); ok {
+			authHeader = ctxAuthHeader
+		}
 	}
 	if padlock.req != nil {
 		authHeader = padlock.req.Header.Get("Authorization")
