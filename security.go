@@ -128,9 +128,13 @@ var defaultOptions = &DefaultPadlockOptions{
 
 func checkKey() (Key, error) {
 	if key == nil {
-		return nil, errors.New("security.RegisterKey has not being called")
+		return nil, errors.New("security.RegisterKey has needs to be called from main")
 	}
 	return key, nil
+}
+
+func RegisterKey(k Key) {
+	key = k
 }
 
 func New(req *http.Request) (*Padlock, error) {
