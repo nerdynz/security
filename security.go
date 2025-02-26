@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	mathRand "math/rand"
 	"net/http"
@@ -110,7 +109,6 @@ type Padlock struct {
 	key Key
 	// Cache        Cache
 	token        string
-	siteID       int
 	loggedInUser *SessionUser
 	authToken    string
 }
@@ -126,11 +124,11 @@ var defaultOptions = &DefaultPadlockOptions{
 	DefaultTokenName:           "UserCookie",
 }
 
-func checkKey() (Key, error) {
+func checkKey() Key {
 	if key == nil {
-		return nil, errors.New("security.RegisterKey has needs to be called from main")
+		panic(errors.New("security.RegisterKey has needs to be called from main"))
 	}
-	return key, nil
+	return key
 }
 
 func RegisterKey(k Key) {
@@ -139,10 +137,7 @@ func RegisterKey(k Key) {
 
 func New(req *http.Request) (*Padlock, error) {
 	padlock := &Padlock{}
-	key, err := checkKey()
-	if err != nil {
-		return nil, err
-	}
+	key := checkKey()
 
 	padlock.req = req
 	padlock.ctx = req.Context()
@@ -150,15 +145,12 @@ func New(req *http.Request) (*Padlock, error) {
 	return padlock, nil
 }
 
-func NewFromContext(ctx context.Context) (*Padlock, error) {
+func NewFromContext(ctx context.Context) *Padlock {
 	padlock := &Padlock{}
 	padlock.ctx = ctx
-	key, err := checkKey()
-	if err != nil {
-		return nil, err
-	}
+	key := checkKey()
 	padlock.key = key
-	return padlock, nil
+	return padlock
 }
 
 func (padlock *Padlock) UserCachedValue(key string) ([]byte, error) {
@@ -251,17 +243,17 @@ func (padlock *Padlock) login(ulid string, email string, password string, option
 	}
 
 	if user.Email == "" && user.Username == "" && ulid == "" {
-		return nil, errors.New("Email must be provided")
+		return nil, errors.New("email must be provided")
 	}
 
 	info.Expiration = time.Now().Add(duration)
 	info.User = user
 	if user.ULID == "" {
-		return nil, errors.New("Invalid user ulid. is your Key decoding ulid correctly")
+		return nil, errors.New("invalid user ulid. is your Key decoding ulid correctly")
 	}
 	info.Token = Encrypt(user.ULID)
 	if info.Token == "" {
-		return nil, errors.New("Invalid token")
+		return nil, errors.New("invalid token")
 	}
 
 	err = padlock.key.SetLogin(info.Token, info, duration)
@@ -272,10 +264,10 @@ func (padlock *Padlock) login(ulid string, email string, password string, option
 	padlock.cacheLogin(info.User, info.Token)
 
 	// make sure we are fully logged in then also check for other sites we may belong to
-	sites, _ := padlock.key.GetSites(info.User.Email) // dont care about this error
-	// if err != nil {
-	// 	return nil, err
-	// }
+	sites, err := padlock.key.GetSites(padlock.ctx, info.User.Email) // dont care about this error
+	if err != nil {
+		return nil, err
+	}
 	info.Sites = sites
 
 	return info, nil
@@ -289,11 +281,11 @@ func (padlock *Padlock) SiteULID() (string, error) {
 	if padlock.IsLoggedIn() {
 		user, _, _ := padlock.LoggedInUser()
 		if user.SiteULID == "" {
-			return "", errors.New("Invalid user site_ulid")
+			return "", errors.New("invalid user site_ulid")
 		}
 		return user.SiteULID, nil
 	}
-	return "", errors.New("Site ulid accessed without being logged in")
+	return "", errors.New("site ulid accessed without being logged in")
 }
 
 func (padlock *Padlock) IsLoggedIn() bool {
@@ -377,7 +369,7 @@ func (padlock *Padlock) GetAuthToken() (authToken string, err error) {
 		return authToken, nil
 	}
 
-	return "", errors.New("Unauthorised")
+	return "", errors.New("unauthorised")
 }
 
 func (padlock *Padlock) LoggedInUserULID() (string, error) {
@@ -482,7 +474,7 @@ func Decrypt(cryptoText string) (string, error) {
 	// XORKeyStream can work in-place if the two arguments are the same.
 	stream.XORKeyStream(ciphertext, ciphertext)
 
-	return fmt.Sprintf("%s", ciphertext), nil
+	return string(ciphertext), nil
 }
 
 func base64Decrypt(b64 string) ([]byte, error) {
@@ -510,7 +502,7 @@ func ULID() string {
 }
 
 func (padlock *Padlock) Sites(email string) ([]*Site, error) {
-	return padlock.key.GetSites(email)
+	return padlock.key.GetSites(padlock.ctx, email)
 }
 
 type Key interface {
@@ -521,7 +513,7 @@ type Key interface {
 	SetCacheValue(userkey string, key string, value []byte, duration time.Duration) error
 	GetCacheValue(userkey string, key string) ([]byte, error)
 	GetAuthToken(*http.Request) (string, error)
-	GetSites(email string) ([]*Site, error)
+	GetSites(context context.Context, email string) ([]*Site, error)
 }
 
 func tokenFromAuthorizationHeader(authHeader string) (string, error) {
