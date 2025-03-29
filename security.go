@@ -163,7 +163,7 @@ func (padlock *Padlock) GetCachedValue(key string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return padlock.key.GetCacheValue(authToken, key)
+	return padlock.key.GetCacheValue(padlock.ctx, authToken, key)
 }
 
 // SetCachedValue grab and cast other stuff to what you need from a user
@@ -172,7 +172,7 @@ func (padlock *Padlock) SetCachedValue(key string, value []byte, duration time.D
 	if err != nil {
 		return err
 	}
-	return padlock.key.SetCacheValue(authToken, key, value, duration)
+	return padlock.key.SetCacheValue(padlock.ctx, authToken, key, value, duration)
 }
 
 // BypassLoginReturningCookie gets a login cookie without needing user name and password,
@@ -256,7 +256,7 @@ func (padlock *Padlock) login(ulid string, email string, password string, option
 		return nil, errors.New("invalid token")
 	}
 
-	err = padlock.key.SetLogin(info.Token, info, duration)
+	err = padlock.key.SetLogin(padlock.ctx, info.Token, info, duration)
 	if err != nil {
 		return nil, err
 	}
@@ -302,14 +302,14 @@ func (padlock *Padlock) IsLoggedInAs(userType string) bool {
 }
 
 func (padlock *Padlock) ExpireLoginToken(token string) (bool, error) {
-	err := padlock.key.ExpireLoggedInUser(token)
+	err := padlock.key.ExpireLoggedInUser(padlock.ctx, token)
 	if err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (padlock *Padlock) Logout() (bool, error) {
+func (padlock *Padlock) Logout(ctx context.Context) (bool, error) {
 	_, token, err := padlock.LoggedInUser()
 	if err != nil {
 		return false, err
@@ -321,7 +321,7 @@ func (padlock *Padlock) UpdateAuthToken(tok string) {
 	padlock.token = tok
 }
 
-func (padlock *Padlock) GetAuthToken() (authToken string, err error) {
+func (padlock *Padlock) GetAuthToken(ctx context.Context) (authToken string, err error) {
 	authToken = padlock.token // we already have it
 
 	// check for basic authentication header
@@ -380,7 +380,7 @@ func (padlock *Padlock) LoggedInUserULID() (string, error) {
 	return user.ULID, nil
 }
 
-func (padlock *Padlock) LoggedInUserID() int {
+func (padlock *Padlock) LoggedInUserID(ctx context.Context) int {
 	user, _, err := padlock.LoggedInUser()
 	if err != nil {
 		return -1
@@ -398,12 +398,12 @@ func (padlock *Padlock) LoggedInUser() (user *SessionUser, authToken string, err
 	if padlock.loggedInUser != nil {
 		return padlock.loggedInUser, padlock.authToken, nil
 	}
-	authToken, err = padlock.GetAuthToken()
+	authToken, err = padlock.GetAuthToken(padlock.ctx)
 	if err != nil {
 		return nil, "", err
 	}
 
-	info, err := padlock.key.GetLogin(authToken)
+	info, err := padlock.key.GetLogin(padlock.ctx, authToken)
 	if err != nil {
 		return nil, "", err
 	}
@@ -506,12 +506,12 @@ func (padlock *Padlock) Sites(email string) ([]*Site, error) {
 }
 
 type Key interface {
-	GetLogin(cacheKey string) (*SessionInfo, error)
-	SetLogin(cacheKey string, value *SessionInfo, duration time.Duration) error
-	ExpireLoggedInUser(key string) error
+	GetLogin(ctx context.Context, cacheKey string) (*SessionInfo, error)
+	SetLogin(ctx context.Context, cacheKey string, value *SessionInfo, duration time.Duration) error
+	ExpireLoggedInUser(ctx context.Context, key string) error
 	DoLogin(context context.Context, notLoggedInUser *NotAuthorizedUser) (*SessionUser, error)
-	SetCacheValue(userkey string, key string, value []byte, duration time.Duration) error
-	GetCacheValue(userkey string, key string) ([]byte, error)
+	SetCacheValue(ctx context.Context, userkey string, key string, value []byte, duration time.Duration) error
+	GetCacheValue(ctx context.Context, userkey string, key string) ([]byte, error)
 	GetAuthToken(*http.Request) (string, error)
 	GetSites(context context.Context, email string) ([]*Site, error)
 }
